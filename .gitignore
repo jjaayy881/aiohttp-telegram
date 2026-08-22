@@ -1,0 +1,16 @@
+# Niemals Telegram-Session-Dateien committen (entspricht Zugangsdaten!)
+*.session
+*.session-journal
+config.json
+
+# Python-Cache (wird lokal beim Ausführen automatisch neu erzeugt)
+__pycache__/
+*.pyc
+
+# Android/Gradle Build-Ausgaben
+/build
+/app/build
+.gradle
+local.properties
+*.iml
+.idea

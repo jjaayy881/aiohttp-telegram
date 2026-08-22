@@ -1,0 +1,82 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.example.tgserver'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.tgserver"
+        // Vorke Z5 (Amlogic S905W, Android 7.1.2 = API 25) und diverse
+        // Fire-TV-Geräte brauchen minSdk <= 25. 24 ist das echte Minimum,
+        // das mit androidx.appcompat:1.7.0 noch baut (appcompat 1.7.0
+        // selbst verlangt schon mindestens API 24).
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        ndk {
+            // arm64-v8a: moderne 64-bit Geräte.
+            // armeabi-v7a: viele TV-Boxen/Sticks (u.a. Vorke Z5, teils auch
+            // Fire TV) laufen mit einem reinen 32-bit Android-Image, obwohl
+            // die Hardware 64-bit-fähig ist - ohne diesen Eintrag lässt sich
+            // die APK dort gar nicht erst installieren.
+            abiFilters "arm64-v8a", "armeabi-v7a"
+        }
+
+        python {
+            // Explizit auf 3.10 setzen: aiohttp 3.10.10 gibt es bei
+            // Chaquopy nur als Wheel für Python 3.9-3.13, nicht für das
+            // sonst genutzte Standard-3.8. Damit kommen wir außerdem
+            // näher an die Python-Version aus dem funktionierenden
+            // Pydroid3-Setup.
+            version "3.10"
+            pip {
+                // Kurigram statt Original-Pyrogram: identische API
+                // (import bleibt "from pyrogram import Client"), aber mit
+                // Forum-Topic-Unterstützung (is_forum, get_forum_topics),
+                // die das Original-Paket nicht kennt und die wir für
+                // Kiosk/ArcheMovie brauchen.
+                install "kurigram"
+
+                // tgcrypto: native, schnelle AES-Entschlüsselung für
+                // Pyrogram-Downloads (das Äquivalent zu cryptg bei Telethon).
+                install "tgcrypto"
+
+                // aiohttp: Chaquopy stellt nur fertig kompilierte Android-
+                // Wheels für ausgewählte Versionen bereit. 3.10.10 ist die 
+                // höchste für Python 3.10 verfügbare Version.
+                install "aiohttp==3.10.10"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+    maven { url "https://chaquo.com/maven" }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+}
