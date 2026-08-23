@@ -126,13 +126,28 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(reloadButton)
 
+        val hardRestartButton = Button(this).apply {
+            text = "Server KOMPLETT neu starten (nach Config-Änderung)"
+            setOnClickListener {
+                // "Neu laden" reicht NICHT, wenn der Python-Server schon läuft:
+                // Der blockierende asyncio-Thread in ServerService liest neue
+                // Werte nur beim allerersten Start dieses Prozesses ein. Ein
+                // harter Prozess-Kill ist der einzige zuverlässige Weg, das
+                // zu erzwingen - Android startet die App/den Service (dank
+                // START_STICKY) danach automatisch mit der aktuellen
+                // config.json neu.
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }
+        }
+        root.addView(hardRestartButton)
+
         root.addView(TextView(this).apply {
-            text = "\nHinweis: Wenn der Server schon mit einer ANDEREN " +
-                    "config.json lief und du die Datei geändert hast, reicht " +
-                    "\"Neu laden\" hier nicht - die App einmal komplett per " +
-                    "\"Beenden erzwingen\" (Android-Einstellungen -> Apps) " +
-                    "stoppen und neu öffnen, damit die neuen Werte sicher " +
-                    "greifen."
+            text = "\nWICHTIG: \"Neu laden\" reicht NACH einer config.json-" +
+                    "Änderung NICHT aus, wenn der Server schon läuft - der " +
+                    "Python-Thread bleibt sonst mit den ALTEN Werten aktiv, " +
+                    "ohne jede Fehlermeldung. Immer den Button \"Server " +
+                    "KOMPLETT neu starten\" oben nutzen (entspricht einem " +
+                    "harten Prozess-Kill, App startet automatisch neu)."
             textSize = 12f
         })
 

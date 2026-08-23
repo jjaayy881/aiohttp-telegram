@@ -770,7 +770,24 @@ async def player_api_handler(request):
     password = request.query.get("password", "")
 
     if not _xtream_auth_ok(username, password):
-        return web.json_response({"user_info": {"auth": 0}})
+        # server_info MUSS auch bei falschem Login mitgeschickt werden -
+        # manche Player (TiviMate) erwarten das Feld unbedingt und zeigen
+        # sonst eine unklare "Fehler bei der Verarbeitung"-Meldung statt
+        # einer klaren Login-Fehlermeldung.
+        host_only = (request.host or "127.0.0.1").split(":")[0]
+        return web.json_response({
+            "user_info": {"auth": 0, "status": "Disabled"},
+            "server_info": {
+                "url": host_only,
+                "port": str(PORT),
+                "https_port": "0",
+                "server_protocol": "http",
+                "rtmp_port": "0",
+                "timezone": "Europe/Vienna",
+                "timestamp_now": int(time.time()),
+                "time_now": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        })
 
     action = request.query.get("action", "")
 
@@ -952,7 +969,7 @@ async def main():
     await site.start()
 
     log(f"Server läuft auf Port {PORT}")
-    log(f"Xtream Codes API (TiviMate/IPTV Smarters): Username={XTREAM_USER}")
+    log(f"Xtream Codes API (TiviMate/IPTV Smarters): Username={XTREAM_USER} Passwort={XTREAM_PASS}")
     try:
         await asyncio.Event().wait()
     finally:
