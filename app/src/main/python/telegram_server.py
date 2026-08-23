@@ -765,9 +765,28 @@ def _xtream_auth_ok(username, password):
     return username == XTREAM_USER and password == XTREAM_PASS
 
 
+async def _xtream_params(request):
+    """Liest Parameter aus GET-Query UND POST-Body.
+    Manche IPTV-Player (TiviMate u.a.) senden den Xtream-Login als POST mit
+    application/x-www-form-urlencoded statt als GET-Query-String - mit nur
+    request.query bleiben username/password dann leer -> auth schlägt fehl,
+    ohne dass am Server sichtbar etwas falsch wäre."""
+    params = dict(request.query)
+    if request.method == "POST":
+        try:
+            post_params = await request.post()
+            for key, value in post_params.items():
+                if not params.get(key):
+                    params[key] = value
+        except Exception:
+            pass  # kein Form-Body vorhanden (z.B. leer oder JSON) - GET-Werte bleiben gültig
+    return params
+
+
 async def player_api_handler(request):
-    username = request.query.get("username", "")
-    password = request.query.get("password", "")
+    params = await _xtream_params(request)
+    username = params.get("username", "")
+    password = params.get("password", "")
 
     if not _xtream_auth_ok(username, password):
         # server_info MUSS auch bei falschem Login mitgeschickt werden -
@@ -789,7 +808,7 @@ async def player_api_handler(request):
             }
         })
 
-    action = request.query.get("action", "")
+    action = params.get("action", "")
 
     if action == "":
         # server_info.url MUSS eine echte, erreichbare Adresse sein - viele
@@ -837,7 +856,7 @@ async def player_api_handler(request):
         return web.json_response(cats)
 
     if action == "get_vod_streams":
-        requested_cat = request.query.get("category_id")
+        requested_cat = params.get("category_id")
         result = []
         for idx, channel_name in enumerate(CHANNEL_CHAT_ID.keys(), start=1):
             if requested_cat and str(idx) != requested_cat:
@@ -862,7 +881,7 @@ async def player_api_handler(request):
         return web.json_response(result)
 
     if action == "get_vod_info":
-        item = _find_vod_item(request.query.get("vod_id"))
+        item = _find_vod_item(params.get("vod_id"))
         if not item:
             return web.json_response({}, status=404)
         return web.json_response({
@@ -957,8 +976,10 @@ async def main():
     app.router.add_get("/topics", topics_handler)
     app.router.add_get("/list.json", json_handler)
     app.router.add_get("/playlist.m3u", m3u_handler)
-    app.router.add_get("/player_api.php", player_api_handler)
-    app.router.add_get("/panel_api.php", panel_api_handler)
+    # add_route("*", ...) statt add_get: manche Player (TiviMate) senden den
+    # Xtream-Login als POST statt GET.
+    app.router.add_route("*", "/player_api.php", player_api_handler)
+    app.router.add_route("*", "/panel_api.php", panel_api_handler)
     app.router.add_get("/movie/{username}/{password}/{stream_id}.mp4", movie_stream_handler)
 
     runner = web.AppRunner(app)
@@ -969,7 +990,7 @@ async def main():
     await site.start()
 
     log(f"Server läuft auf Port {PORT}")
-    log(f"Xtream Codes API (TiviMate/IPTV Smarters): Username={XTREAM_USER} Passwort={XTREAM_PASS}")
+    log(f"Xtream Codes API (TiviMate/IPTV Smarters): Username={XTREAM_USER}")
     try:
         await asyncio.Event().wait()
     finally:
