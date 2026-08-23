@@ -775,23 +775,37 @@ async def player_api_handler(request):
     action = request.query.get("action", "")
 
     if action == "":
+        # server_info.url MUSS eine echte, erreichbare Adresse sein - viele
+        # Player (TiviMate, Sparkle) bauen daraus die Stream-URLs. Wir leiten
+        # sie aus dem tatsächlichen Request ab (Host-Header), statt eine
+        # feste Adresse zu raten - funktioniert dadurch unabhängig davon,
+        # unter welcher IP das Gerät gerade erreichbar ist.
+        host_header = request.host or "127.0.0.1"
+        host_only = host_header.split(":")[0]
+
         return web.json_response({
             "user_info": {
                 "username": XTREAM_USER,
                 "password": XTREAM_PASS,
+                "message": "",
                 "auth": 1,
                 "status": "Active",
-                "exp_date": None,
+                "exp_date": "4102444800",  # Jahr 2100 - manche Player kommen mit null/None nicht klar
                 "is_trial": "0",
                 "active_cons": "0",
+                "created_at": "1700000000",
                 "max_connections": "1",
+                "allowed_output_formats": ["m3u8", "ts", "mp4"],
             },
             "server_info": {
-                "url": "0.0.0.0",
+                "url": host_only,
                 "port": str(PORT),
-                "https_port": str(PORT),
+                "https_port": "0",
                 "server_protocol": "http",
+                "rtmp_port": "0",
                 "timezone": "Europe/Vienna",
+                "timestamp_now": int(time.time()),
+                "time_now": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
         })
 
