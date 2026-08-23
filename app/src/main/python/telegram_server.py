@@ -788,6 +788,11 @@ async def player_api_handler(request):
     username = params.get("username", "")
     password = params.get("password", "")
 
+    # Diagnose: JEDE Anfrage loggen (Methode + Parameter, Passwort maskiert),
+    # damit sichtbar ist, ob ein Player überhaupt ankommt und was er schickt.
+    safe_params = {k: ("***" if k == "password" else v) for k, v in params.items()}
+    log(f"[Xtream] {request.method} player_api.php von {request.remote} - Parameter: {safe_params}")
+
     if not _xtream_auth_ok(username, password):
         # server_info MUSS auch bei falschem Login mitgeschickt werden -
         # manche Player (TiviMate) erwarten das Feld unbedingt und zeigen
