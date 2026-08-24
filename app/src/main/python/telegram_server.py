@@ -1144,6 +1144,7 @@ async def main():
     app.router.add_route("*", "/portal.php", stalker_portal_handler)
     app.router.add_route("*", "/stalker_portal/server/load.php", stalker_portal_handler)
     app.router.add_route("*", "/c/portal.php", stalker_portal_handler)
+    app.router.add_route("*", "/server/load.php", stalker_portal_handler)
     app.router.add_get("/movie/{username}/{password}/{stream_id}.mp4", movie_stream_handler)
 
     runner = web.AppRunner(app)
