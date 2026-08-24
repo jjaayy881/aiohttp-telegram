@@ -1140,9 +1140,12 @@ async def main():
     app.router.add_route("*", "/panel_api.php", panel_api_handler)
 
     # Stalker Portal: verschiedene Clients (StbEmu u.a.) probieren
-    # unterschiedliche Standard-Pfade - beide auf denselben Handler legen.
+    # unterschiedliche Standard-Pfade - alle Pfad-Varianten auf denselben Handler legen.
     app.router.add_route("*", "/portal.php", stalker_portal_handler)
+    app.router.add_route("*", "/Portal.php", stalker_portal_handler)
     app.router.add_route("*", "/stalker_portal/server/load.php", stalker_portal_handler)
+    app.router.add_route("*", "/Portal.php/stalker_portal/server/load.php", stalker_portal_handler)
+    app.router.add_route("*", "/server/load.php", stalker_portal_handler)
     app.router.add_route("*", "/c/portal.php", stalker_portal_handler)
     app.router.add_get("/movie/{username}/{password}/{stream_id}.mp4", movie_stream_handler)
 
