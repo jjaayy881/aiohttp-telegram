@@ -1114,7 +1114,17 @@ async def main():
     await ensure_chats_resolved()
 
     log("Baue aiohttp-Server auf ...")
-    app = web.Application()
+
+    @web.middleware
+    async def not_found_logger(request, handler):
+        try:
+            return await handler(request)
+        except web.HTTPNotFound:
+            log(f"[404] Unbekannter Pfad: {request.method} {request.path} "
+                f"- Query: {dict(request.query)} - Headers: {dict(request.headers)}")
+            raise
+
+    app = web.Application(middlewares=[not_found_logger])
     app.router.add_get("/", browse_handler)
     app.router.add_get("/stream", stream_handler, allow_head=False)
     app.router.add_head("/stream", stream_handler)
