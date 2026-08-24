@@ -661,7 +661,15 @@ async def json_handler(request):
 # =========================
 # TMDB MATCHING (für Poster in der Xtream-Codes-API)
 # =========================
+YEAR_PATTERN = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+
 def clean_filename(filename):
+    """Gibt (bereinigter_titel, jahr_oder_None) zurück.
+    Wichtig: die Jahreszahl wird HERAUSGELÖST statt im Suchtext zu bleiben -
+    'Nightmare on Elm Street 3 -Freddy Krüger lebt -1987' als TMDB-Suchtext
+    (inkl. "-1987") liefert bei Titeln mit Untertitel oft KEINEN Treffer.
+    Getrennt als Jahresfilter übergeben trifft deutlich zuverlässiger."""
     name = os.path.splitext(filename)[0]
     patterns = [
         r'\b(1080p|720p|4k|2160p|480p|hdrip|web-dl|webrip|bluray|x264|x265|h264|h265|aac|dts)\b',
@@ -669,29 +677,48 @@ def clean_filename(filename):
     ]
     for p in patterns:
         name = re.sub(p, ' ', name, flags=re.IGNORECASE)
-    return name.strip()
+
+    year_match = YEAR_PATTERN.search(name)
+    year = year_match.group(1) if year_match else None
+    if year_match:
+        name = name[:year_match.start()] + name[year_match.end():]
+
+    name = name.strip(" -._")
+    name = re.sub(r"\s+", " ", name)
+    return name, year
 
 
-async def fetch_tmdb_metadata(clean_title):
+async def fetch_tmdb_metadata(clean_title, year=None):
     if not TMDB_KEY or TMDB_SESSION is None or not clean_title:
         return None
     url = "https://api.themoviedb.org/3/search/movie"
     params = {"api_key": TMDB_KEY, "query": clean_title, "language": TMDB_LANG}
+    if year:
+        params["year"] = year
     try:
         async with TMDB_SESSION.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as res:
             if res.status == 200:
                 data = await res.json()
                 results = data.get("results", [])
+                # Fallback: falls die Jahres-gefilterte Suche nichts findet,
+                # nochmal ohne Jahr versuchen (Jahr in der Datenbank kann bei
+                # internationalen Erst-/Zweitveröffentlichungen abweichen).
+                if not results and year:
+                    params.pop("year", None)
+                    async with TMDB_SESSION.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as res2:
+                        if res2.status == 200:
+                            data = await res2.json()
+                            results = data.get("results", [])
                 if results:
                     movie = results[0]
                     poster = f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else ""
                     release_date = movie.get("release_date", "")
-                    year = release_date.split("-")[0] if release_date else ""
+                    movie_year = release_date.split("-")[0] if release_date else ""
                     return {
                         "title": movie.get("title"),
                         "overview": movie.get("overview", ""),
                         "poster": poster,
-                        "year": year,
+                        "year": movie_year,
                     }
     except Exception as e:
         log(f"[TMDB] Fehler bei '{clean_title}': {e}")
@@ -719,8 +746,8 @@ async def resolve_vod_item(channel_name, topic_title, msg):
         return _vod_meta_cache[key]
 
     raw_name = get_filename(msg)
-    clean_name = clean_filename(raw_name)
-    tmdb_meta = await fetch_tmdb_metadata(clean_name)
+    clean_name, filename_year = clean_filename(raw_name)
+    tmdb_meta = await fetch_tmdb_metadata(clean_name, year=filename_year)
 
     display_name = tmdb_meta["title"] if tmdb_meta else clean_name
     if topic_title:
@@ -926,6 +953,122 @@ async def movie_stream_handler(request):
 
 
 # =========================
+# STALKER PORTAL (MAG-Emulatoren wie StbEmu)
+# =========================
+# Komplett anderes Protokoll als Xtream: keine Username/Passwort-Anmeldung,
+# sondern eine MAC-Adresse (kommt als Cookie "mac" mit) + ein Token, der
+# einmalig per "handshake" geholt und danach bei JEDER weiteren Anfrage im
+# Authorization-Header ("Bearer <token>") mitgeschickt werden muss.
+# Antworten sind immer in {"js": ...} eingepackt (Stalker-Konvention).
+import secrets
+
+_stalker_tokens = {}  # token -> mac (rein im Speicher, wie alle anderen Caches hier)
+
+
+def _stalker_issue_token(mac):
+    token = secrets.token_hex(16)
+    _stalker_tokens[token] = mac
+    return token
+
+
+def _stalker_token_ok(request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:] in _stalker_tokens
+    return False
+
+
+def _stalker_mac(request):
+    return request.cookies.get("mac", "unknown")
+
+
+async def stalker_portal_handler(request):
+    action = request.query.get("action", "")
+    req_type = request.query.get("type", "")
+
+    if action == "handshake":
+        mac = _stalker_mac(request)
+        token = _stalker_issue_token(mac)
+        log(f"[Stalker] handshake von MAC={mac}")
+        return web.json_response({"js": {"token": token, "random": secrets.token_hex(8)}})
+
+    # Ab hier: gültiger Token per Authorization-Header Pflicht
+    if not _stalker_token_ok(request):
+        return web.json_response({"js": {}}, status=403)
+
+    if action == "get_profile":
+        mac = _stalker_mac(request)
+        return web.json_response({"js": {
+            "id": 1,
+            "mac": mac,
+            "stb_type": "MAG250",
+            "status": 0,
+            "max_online_time": 0,
+            "tariff_plan_id": 0,
+        }})
+
+    if action == "get_main_info" or (req_type == "account_info" and action == "get_main_info"):
+        return web.json_response({"js": {"status": 0, "phone": "", "end_date": ""}})
+
+    if req_type == "vod" and action == "get_categories":
+        cats = [
+            {"id": str(idx + 1), "title": name, "alias": name}
+            for idx, name in enumerate(CHANNEL_CHAT_ID.keys())
+        ]
+        return web.json_response({"js": cats})
+
+    if req_type == "vod" and action == "get_ordered_list":
+        requested_cat = request.query.get("category")
+        page = int(request.query.get("p") or 1)
+        page_size = 14  # typischer Stalker-Client-Default
+
+        all_items = []
+        for idx, channel_name in enumerate(CHANNEL_CHAT_ID.keys(), start=1):
+            if requested_cat and requested_cat != "*" and str(idx) != str(requested_cat):
+                continue
+            chat_id = CHANNEL_CHAT_ID[channel_name]
+            is_forum = CHANNEL_IS_FORUM.get(channel_name, False)
+            fixed_topics = CHANNEL_FIXED_TOPICS.get(channel_name)
+            async for topic_id, topic_title, msg in iter_media_messages(chat_id, is_forum, fixed_topics, limit=50):
+                item = await resolve_vod_item(channel_name, topic_title, msg)
+                all_items.append({
+                    "id": str(item["vod_id"]),
+                    "name": item["name"],
+                    "o_name": item["name"],
+                    "screenshot_uri": item["poster"],
+                    "year": item.get("year", ""),
+                    "description": item.get("overview", ""),
+                    "cmd": f"vod_id:{item['vod_id']}",
+                })
+
+        start = (page - 1) * page_size
+        page_items = all_items[start:start + page_size]
+        return web.json_response({"js": {
+            "total_items": len(all_items),
+            "max_page_items": page_size,
+            "selected_item": 0,
+            "data": page_items,
+        }})
+
+    if req_type == "vod" and action == "create_link":
+        cmd = request.query.get("cmd", "")
+        vod_id = cmd.split(":")[-1] if ":" in cmd else cmd
+        item = _find_vod_item(vod_id)
+        if not item:
+            return web.json_response({"js": {}}, status=404)
+        base = f"{request.scheme}://{request.host}"
+        stream_url = f"{base}/movie/{XTREAM_USER}/{XTREAM_PASS}/{item['vod_id']}.mp4"
+        # Stalker-Clients erwarten den fertigen Play-Befehl im "cmd"-Feld
+        return web.json_response({"js": {"cmd": stream_url, "id": item["vod_id"]}})
+
+    if req_type in ("itv", "epg") or action in ("get_all_channels", "get_genres"):
+        # Live-TV bieten wir (noch) nicht an
+        return web.json_response({"js": {"data": []}})
+
+    return web.json_response({"js": {}}, status=400)
+
+
+# =========================
 # M3U PLAYLIST (für TiviMate & andere IPTV-Player)
 # =========================
 async def m3u_handler(request):
@@ -985,6 +1128,12 @@ async def main():
     # Xtream-Login als POST statt GET.
     app.router.add_route("*", "/player_api.php", player_api_handler)
     app.router.add_route("*", "/panel_api.php", panel_api_handler)
+
+    # Stalker Portal: verschiedene Clients (StbEmu u.a.) probieren
+    # unterschiedliche Standard-Pfade - beide auf denselben Handler legen.
+    app.router.add_route("*", "/portal.php", stalker_portal_handler)
+    app.router.add_route("*", "/stalker_portal/server/load.php", stalker_portal_handler)
+    app.router.add_route("*", "/c/portal.php", stalker_portal_handler)
     app.router.add_get("/movie/{username}/{password}/{stream_id}.mp4", movie_stream_handler)
 
     runner = web.AppRunner(app)
