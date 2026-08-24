@@ -12,9 +12,9 @@ from pyrogram import Client
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TelegramStalker")
 
-# Telethon/Pyrogram Konfiguration
-API_ID = 1234567  # Deine API ID
-API_HASH = "DEIN_API_HASH"  # Dein API Hash
+# Telegram API Konfiguration
+API_ID = 1234567  # Deine API ID eintragen
+API_HASH = "DEIN_API_HASH"  # Dein API Hash eintragen
 BOT_TOKEN = None  # Wenn Userbot, None lassen
 
 XTREAM_USER = "admin"
@@ -94,7 +94,7 @@ async def iter_media_messages(chat_id, is_forum, fixed_topics, limit=50):
                     topic_title = fixed_topics[topic_id]
             yield msg.reply_to_message_id, topic_title, msg
 
-# --- STALKER PORTAL HANDLER (Routing für 127.0.0.1:8585, /portal.php & load.php) ---
+# --- STALKER PORTAL HANDLER (Catch-All Routing) ---
 
 async def stalker_portal_handler(request):
     action = request.query.get("action", "")
@@ -260,7 +260,7 @@ async def preload_cache():
 
 def create_app():
     app = web.Application()
-    # Flexible Routen für 127.0.0.1:8585, 127.0.0.1:8585/portal.php und load.php
+    # Flexible Routen für 127.0.0.1:8585, /portal.php und load.php
     app.router.add_get(r"/{path:.*load.php.*}", stalker_portal_handler)
     app.router.add_get(r"/{path:.*portal.php.*}", stalker_portal_handler)
     app.router.add_get("/", stalker_portal_handler)
@@ -288,11 +288,15 @@ async def main():
     log(f"Server läuft auf Port {port}")
     log("Nutze als Portal-URL im Player: http://127.0.0.1:8585")
 
-    # Dauerhaft laufen lassen
     await asyncio.Event().wait()
+
+# Bridge für Chaquopy / Android App Aufruf
+def start_blocking():
+    """ Wird vom Java / Kotlin Code im Android App Wrapper aufgerufen """
+    asyncio.run(main())
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        start_blocking()
     except KeyboardInterrupt:
         log("Server gestoppt.")
