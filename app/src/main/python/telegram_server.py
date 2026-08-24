@@ -810,6 +810,14 @@ async def _xtream_params(request):
     return params
 
 
+async def stalker_static_js_handler(request):
+    """Leere, aber gültige (200 OK) Antwort für /c/*.js - manche Stalker-
+    Clients laden diese "Web-UI"-Ressourcen der echten Ministra-Middleware
+    nach und geben auf, wenn sie 404 bekommen. Wir bauen die Web-Oberfläche
+    NICHT nach, sondern liefern nur ein leeres, aber valides JS zurück."""
+    return web.Response(text="// noop", content_type="application/javascript")
+
+
 async def player_api_handler(request):
     params = await _xtream_params(request)
     username = params.get("username", "")
@@ -982,6 +990,18 @@ def _stalker_mac(request):
     return request.cookies.get("mac", "unknown")
 
 
+def _extract_vod_id_from_cmd(cmd):
+    """Manche Stalker-Clients (StbEmu u.a.) senden bei create_link NICHT das
+    von uns vorgegebene 'vod_id:123'-Format, sondern bauen sich selbst einen
+    Pfad wie '/media/file_123.mpg' zusammen. Beide Formen werden erkannt."""
+    if cmd.startswith("vod_id:"):
+        return cmd.split(":", 1)[1]
+    match = re.search(r"(\d+)(?:\.\w+)?$", cmd)
+    if match:
+        return match.group(1)
+    return cmd
+
+
 async def stalker_portal_handler(request):
     action = request.query.get("action", "")
     req_type = request.query.get("type", "")
@@ -1018,6 +1038,28 @@ async def stalker_portal_handler(request):
         return web.json_response({"js": cats})
 
     if req_type == "vod" and action == "get_ordered_list":
+        # StbEmu fragt Einzelfilme gezielt per movie_id ab (z.B. für die
+        # Detailansicht) - dafür NICHT die komplette Bibliothek neu
+        # durchsuchen (das dauerte beim echten Test 7 Sekunden), sondern
+        # direkt aus dem schon gefüllten Cache beantworten.
+        movie_id_param = request.query.get("movie_id")
+        if movie_id_param:
+            item = _find_vod_item(movie_id_param)
+            if not item:
+                return web.json_response({"js": {"total_items": 0, "max_page_items": 1, "selected_item": 0, "data": []}})
+            data_item = {
+                "id": str(item["vod_id"]),
+                "name": item["name"],
+                "o_name": item["name"],
+                "screenshot_uri": item["poster"],
+                "year": item.get("year", ""),
+                "description": item.get("overview", ""),
+                "cmd": f"vod_id:{item['vod_id']}",
+            }
+            return web.json_response({"js": {
+                "total_items": 1, "max_page_items": 1, "selected_item": 0, "data": [data_item],
+            }})
+
         requested_cat = request.query.get("category")
         page = int(request.query.get("p") or 1)
         page_size = 14  # typischer Stalker-Client-Default
@@ -1052,7 +1094,7 @@ async def stalker_portal_handler(request):
 
     if req_type == "vod" and action == "create_link":
         cmd = request.query.get("cmd", "")
-        vod_id = cmd.split(":")[-1] if ":" in cmd else cmd
+        vod_id = _extract_vod_id_from_cmd(cmd)
         item = _find_vod_item(vod_id)
         if not item:
             return web.json_response({"js": {}}, status=404)
@@ -1060,6 +1102,11 @@ async def stalker_portal_handler(request):
         stream_url = f"{base}/movie/{XTREAM_USER}/{XTREAM_PASS}/{item['vod_id']}.mp4"
         # Stalker-Clients erwarten den fertigen Play-Befehl im "cmd"-Feld
         return web.json_response({"js": {"cmd": stream_url, "id": item["vod_id"]}})
+
+    if req_type == "watchdog":
+        # Playback-Metriken (Bufferings, Fehler etc.) - wir werten das nicht
+        # aus, aber der Client soll keine 400er dafür bekommen.
+        return web.json_response({"js": {}})
 
     if req_type in ("itv", "epg") or action in ("get_all_channels", "get_genres"):
         # Live-TV bieten wir (noch) nicht an
@@ -1145,6 +1192,13 @@ async def main():
     app.router.add_route("*", "/stalker_portal/server/load.php", stalker_portal_handler)
     app.router.add_route("*", "/c/portal.php", stalker_portal_handler)
     app.router.add_route("*", "/server/load.php", stalker_portal_handler)
+
+    # Manche Stalker-Clients (z.B. Sparkle Player) laden vor dem eigentlichen
+    # API-Handshake noch "Web-UI"-Ressourcen der echten Ministra-Middleware
+    # nach und blockieren, wenn die 404 liefern. Wir bauen NICHT die ganze
+    # Web-Oberfläche nach - eine leere, aber gültige (200 OK) JS-Antwort
+    # reicht oft schon aus, damit der Client trotzdem weitermacht.
+    app.router.add_get("/c/{filename:.+\\.js}", stalker_static_js_handler)
     app.router.add_get("/movie/{username}/{password}/{stream_id}.mp4", movie_stream_handler)
 
     runner = web.AppRunner(app)
