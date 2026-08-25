@@ -1072,6 +1072,9 @@ async def stalker_portal_handler(request):
         page = int(request.query.get("p") or 1)
         page_size = 14  # typischer Stalker-Client-Default
 
+        _t0 = time.time()
+        log(f"[Stalker] get_ordered_list: category={requested_cat!r} page={page} - baue Liste auf ...")
+
         all_items = []
         for idx, channel_name in enumerate(CHANNEL_CHAT_ID.keys(), start=1):
             if requested_cat and requested_cat != "*" and str(idx) != str(requested_cat):
@@ -1079,6 +1082,7 @@ async def stalker_portal_handler(request):
             chat_id = CHANNEL_CHAT_ID[channel_name]
             is_forum = CHANNEL_IS_FORUM.get(channel_name, False)
             fixed_topics = CHANNEL_FIXED_TOPICS.get(channel_name)
+            channel_count = 0
             async for topic_id, topic_title, msg in iter_media_messages(chat_id, is_forum, fixed_topics, limit=50):
                 item = await resolve_vod_item(channel_name, topic_title, msg)
                 all_items.append({
@@ -1090,6 +1094,12 @@ async def stalker_portal_handler(request):
                     "description": item.get("overview", ""),
                     "cmd": f"vod_id:{item['vod_id']}",
                 })
+                channel_count += 1
+            log(f"[Stalker]   Kanal '{channel_name}' (is_forum={is_forum}, "
+                f"fixed_topics={fixed_topics}): {channel_count} Filme gefunden")
+
+        elapsed = time.time() - _t0
+        log(f"[Stalker] get_ordered_list fertig: {len(all_items)} Filme insgesamt in {elapsed:.2f}s")
 
         start = (page - 1) * page_size
         page_items = all_items[start:start + page_size]
