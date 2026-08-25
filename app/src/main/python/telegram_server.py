@@ -1006,6 +1006,12 @@ async def stalker_portal_handler(request):
     action = request.query.get("action", "")
     req_type = request.query.get("type", "")
 
+    # Diagnose: JEDE Stalker-Anfrage loggen (Methode, type, action, alle
+    # Query-Parameter) - vorher wurde nur der Handshake geloggt, dadurch war
+    # nicht sichtbar, was beim Klick auf eine Kategorie genau ankommt.
+    log(f"[Stalker] {request.method} type={req_type!r} action={action!r} "
+        f"Query={dict(request.query)}")
+
     if action == "handshake":
         mac = _stalker_mac(request)
         token = _stalker_issue_token(mac)
@@ -1014,6 +1020,8 @@ async def stalker_portal_handler(request):
 
     # Ab hier: gültiger Token per Authorization-Header Pflicht
     if not _stalker_token_ok(request):
+        log(f"[Stalker] Token fehlt/ungültig für action={action!r} - "
+            f"Authorization-Header war: {request.headers.get('Authorization', '(keiner)')!r}")
         return web.json_response({"js": {}}, status=403)
 
     if action == "get_profile":
