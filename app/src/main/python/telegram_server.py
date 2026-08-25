@@ -897,6 +897,7 @@ async def player_api_handler(request):
 
     if action == "get_vod_streams":
         requested_cat = params.get("category_id")
+        base = f"{request.scheme}://{request.host}"
         result = []
         for idx, channel_name in enumerate(CHANNEL_CHAT_ID.keys(), start=1):
             if requested_cat and str(idx) != requested_cat:
@@ -906,6 +907,7 @@ async def player_api_handler(request):
             fixed_topics = CHANNEL_FIXED_TOPICS.get(channel_name)
             async for topic_id, topic_title, msg in iter_media_messages(chat_id, is_forum, fixed_topics, limit=50):
                 item = await resolve_vod_item(channel_name, topic_title, msg)
+                stream_url = f"{base}/movie/{XTREAM_USER}/{XTREAM_PASS}/{item['vod_id']}.mp4"
                 result.append({
                     "num": item["vod_id"],
                     "name": item["name"],
@@ -917,6 +919,10 @@ async def player_api_handler(request):
                     "added": str(int(time.time())),
                     "category_id": str(idx),
                     "container_extension": "mp4",
+                    # Manche Player (z.B. VU Player) bauen die Play-URL nicht
+                    # selbst aus stream_id+container_extension zusammen,
+                    # sondern erwarten sie fertig in diesem Feld.
+                    "direct_source": stream_url,
                 })
         return web.json_response(result)
 
@@ -924,6 +930,8 @@ async def player_api_handler(request):
         item = _find_vod_item(params.get("vod_id"))
         if not item:
             return web.json_response({}, status=404)
+        base = f"{request.scheme}://{request.host}"
+        stream_url = f"{base}/movie/{XTREAM_USER}/{XTREAM_PASS}/{item['vod_id']}.mp4"
         return web.json_response({
             "info": {
                 "movie_image": item["poster"],
@@ -934,10 +942,21 @@ async def player_api_handler(request):
             "movie_data": {
                 "stream_id": item["vod_id"],
                 "container_extension": "mp4",
+                "direct_source": stream_url,
             }
         })
 
     return web.json_response({"error": "unknown action"}, status=400)
+
+
+async def xmltv_handler(request):
+    """Leeres, aber valides XMLTV - wir bieten kein Live-TV/EPG an, aber
+    manche Player (VU Player u.a.) fragen das trotzdem ab und sollten
+    keine 404 dafür bekommen."""
+    return web.Response(
+        text='<?xml version="1.0" encoding="UTF-8"?><tv></tv>',
+        content_type="application/xml",
+    )
 
 
 async def panel_api_handler(request):
@@ -950,11 +969,17 @@ async def movie_stream_handler(request):
     moov-Fix und Flood-Wait-Schutz gelten hier genauso."""
     username = request.match_info.get("username", "")
     password = request.match_info.get("password", "")
+    stream_id_raw = request.match_info.get("stream_id", "")
+    log(f"[Movie] Anfrage: user={username!r} stream_id={stream_id_raw!r} von {request.remote}")
+
     if not _xtream_auth_ok(username, password):
+        log(f"[Movie] Auth fehlgeschlagen für user={username!r}")
         return web.Response(status=401, text="unauthorized")
 
-    item = _find_vod_item(request.match_info.get("stream_id"))
+    item = _find_vod_item(stream_id_raw)
     if not item:
+        log(f"[Movie] Keine vod_id {stream_id_raw!r} im Cache gefunden - "
+            f"war der Film schon in get_vod_streams/get_vod_info dabei?")
         return web.Response(status=404, text="not found")
 
     return await _stream_core(request, item["channel"], item["msg_id"])
@@ -1203,6 +1228,7 @@ async def main():
     # Xtream-Login als POST statt GET.
     app.router.add_route("*", "/player_api.php", player_api_handler)
     app.router.add_route("*", "/panel_api.php", panel_api_handler)
+    app.router.add_get("/xmltv.php", xmltv_handler)
 
     # Stalker Portal: verschiedene Clients (StbEmu u.a.) probieren
     # unterschiedliche Standard-Pfade - beide auf denselben Handler legen.
