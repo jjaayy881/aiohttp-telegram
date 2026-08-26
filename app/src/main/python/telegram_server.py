@@ -775,6 +775,10 @@ def clean_filename(filename):
         r'\b\d\.\d\b',
         # Sonstige Release-Marker
         r'\b(remux|repack|proper|extended|uncut|unrated|imax|multi|dl|german|ger|dubbed|dual)\b',
+        # Kanal-Eigenwerbung im Dateinamen (z.B. "... @ArcheMovie") - viele
+        # Kanäle stempeln ihren eigenen Telegram-Handle mit rein, das
+        # verwirrt die TMDB-Suche, hat aber nichts mit dem Filmtitel zu tun.
+        r'@\w+',
         r'\[.*?\]', r'\(.*?\)', r'\.'
     ]
     for p in patterns:
