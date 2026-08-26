@@ -13,6 +13,7 @@ except RuntimeError:
 
 import json
 import re
+import sys
 import time
 import urllib.parse
 
@@ -596,21 +597,109 @@ async def topics_handler(request):
 # HTML BROWSER
 # =========================
 async def browse_handler(request):
-    html = "<h1>Filme Server</h1><hr>"
+    """Poster-Grid mit eingebettetem HTML5-<video>-Player - spielt direkt im
+    Browser ab (nutzt denselben /movie/-Streaming-Endpunkt wie Xtream Codes,
+    inkl. Head/Tail-Cache). Kein externer Player, keine App-Kompatibilität
+    nötig - läuft identisch auf Windows wie auf Android."""
+    sections_html = ""
+    options_html = '<option value="Alle">Alle Kanäle</option>'
+
     for channel_name, chat_id in CHANNEL_CHAT_ID.items():
-        html += f"<h2>{channel_name}</h2><pre>"
         is_forum = CHANNEL_IS_FORUM.get(channel_name, False)
         fixed_topics = CHANNEL_FIXED_TOPICS.get(channel_name)
-        current_topic = None
+        cards_html = ""
         async for topic_id, topic_title, msg in iter_media_messages(chat_id, is_forum, fixed_topics, limit=50):
-            if is_forum and topic_title != current_topic:
-                current_topic = topic_title
-                html += f"\n<b>[{topic_title}]</b>\n"
-            name = get_filename(msg)
-            safe_channel = urllib.parse.quote(channel_name, safe="")
-            url = f"/stream?channel={safe_channel}&msg={msg.id}"
-            html += f'  <a href="{url}">{name}</a>\n'
-        html += "</pre>"
+            item = await resolve_vod_item(channel_name, topic_title, msg)
+            stream_url = f"/movie/{XTREAM_USER}/{XTREAM_PASS}/{item['vod_id']}.mp4"
+            poster = item["poster"] or ""
+            safe_name = item["name"].replace("'", "&#39;")
+            cards_html += f"""
+            <div class="card" onclick="play('{stream_url}', '{safe_name}')">
+                <div class="poster-wrapper">
+                    <img src="{poster}" loading="lazy"
+                         onerror="this.src='https://images.unsplash.com/photo-1593789198777-f29bc259780e?w=400';">
+                </div>
+                <div class="title" title="{safe_name}">{safe_name}</div>
+            </div>
+            """
+
+        if not cards_html:
+            continue  # leere Kanäle nicht als Kategorie anzeigen
+
+        safe_channel = channel_name.replace('"', '&quot;')
+        options_html += f'<option value="{safe_channel}">{safe_channel}</option>'
+        sections_html += f"""
+        <section class="channel-section" data-channel="{safe_channel}">
+            <h2>{channel_name}</h2>
+            <div class="grid">{cards_html}</div>
+        </section>
+        """
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Filme Server</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Arial, sans-serif; background-color: #141414; color: #fff; margin: 0; padding: 20px; }}
+            h1 {{ text-align: center; color: #00bcd4; font-size: 1.6em; margin: 0 0 16px 0; }}
+            h2 {{ color: #00bcd4; font-size: 1.1em; margin: 24px auto 10px auto; max-width: 1400px; border-bottom: 1px solid #333; padding-bottom: 6px; }}
+
+            .filter-bar {{ max-width: 1400px; margin: 0 auto 8px auto; }}
+            .filter-bar select {{ padding: 8px 12px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; font-size: 0.95em; }}
+
+            #player-wrapper {{ max-width: 900px; margin: 0 auto 24px auto; display: none; }}
+            #player-wrapper.active {{ display: block; }}
+            #player {{ width: 100%; max-height: 60vh; background: #000; border-radius: 8px; }}
+            #now-playing {{ text-align: center; margin-top: 8px; color: #ccc; font-size: 0.95em; }}
+
+            .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; max-width: 1400px; margin: 0 auto; }}
+            .card {{ background: #1e1e1e; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #2a2a2a; transition: transform 0.15s; }}
+            .card:hover {{ transform: scale(1.03); border-color: #00bcd4; }}
+
+            .poster-wrapper {{ position: relative; width: 100%; padding-top: 140%; background: #2a2a2a; }}
+            .poster-wrapper img {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }}
+
+            .title {{ padding: 8px; font-size: 0.85em; font-weight: bold; line-height: 1.3; height: 2.4em; overflow: hidden; }}
+        </style>
+    </head>
+    <body>
+        <h1>📺 Filme Server</h1>
+
+        <div class="filter-bar">
+            <select id="channel-filter" onchange="filterChannel(this.value)">
+                {options_html}
+            </select>
+        </div>
+
+        <div id="player-wrapper">
+            <video id="player" controls autoplay></video>
+            <div id="now-playing"></div>
+        </div>
+
+        {sections_html}
+
+        <script>
+            function play(url, name) {{
+                const wrapper = document.getElementById('player-wrapper');
+                const video = document.getElementById('player');
+                wrapper.classList.add('active');
+                video.src = url;
+                video.play().catch(() => {{}});
+                document.getElementById('now-playing').innerText = name;
+                wrapper.scrollIntoView({{ behavior: 'smooth' }});
+            }}
+            function filterChannel(value) {{
+                document.querySelectorAll('.channel-section').forEach(sec => {{
+                    sec.style.display = (value === 'Alle' || sec.dataset.channel === value) ? '' : 'none';
+                }});
+            }}
+        </script>
+    </body>
+    </html>
+    """
     return web.Response(text=html, content_type="text/html")
 
 
@@ -672,7 +761,20 @@ def clean_filename(filename):
     Getrennt als Jahresfilter übergeben trifft deutlich zuverlässiger."""
     name = os.path.splitext(filename)[0]
     patterns = [
-        r'\b(1080p|720p|4k|2160p|480p|hdrip|web-dl|webrip|bluray|x264|x265|h264|h265|aac|dts)\b',
+        # Auflösung/Quelle
+        r'\b(1080p|720p|4k|uhd|2160p|480p|hdrip|web-?dl|webrip|web|bluray|blu-ray|bdrip|brrip|dvdrip|hdtv)\b',
+        # Video-Codec
+        r'\b(x264|x265|h264|h265|hevc|avc|av1|10bit|8bit)\b',
+        # HDR/Farbraum
+        r'\b(hdr10\+?|hdr|dolby ?vision|dv|sdr)\b',
+        # Audio-Codec/Kanäle - Leerzeichen zwischen Codec und Kanalzahl
+        # ausdrücklich erlaubt ("DD+ 5.1" genauso wie "DD+5.1")
+        r'\b(dd\+?\s?5\.?1|ddp\s?5\.?1|dd\s?5\.?1|ddp|dd\+|dts-?hd|dts|ac3|eac3|truehd|atmos|aac2?\.?0?)\b',
+        # Freistehende Kanalzahl (übrig, wenn der Codec-Name selbst schon
+        # entfernt wurde, z.B. "... DTS 5.1" -> "DTS" weg, "5.1" bleibt)
+        r'\b\d\.\d\b',
+        # Sonstige Release-Marker
+        r'\b(remux|repack|proper|extended|uncut|unrated|imax|multi|dl|german|ger|dubbed|dual)\b',
         r'\[.*?\]', r'\(.*?\)', r'\.'
     ]
     for p in patterns:
@@ -1292,3 +1394,34 @@ def start_blocking(files_dir, api_id, api_hash, session_string, channels_json,
     )
 
     loop.run_until_complete(main())
+
+
+if __name__ == "__main__":
+    # Direkter Start am PC (Windows/Linux/Mac) - liest dieselbe config.json,
+    # die generate_config.py erzeugt und die auch die Android-App nutzt.
+    # Kein separates Windows-Skript nötig, kein Chaquopy/Kotlin involviert.
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    _config_path = os.path.join(_base_dir, "config.json")
+
+    if not os.path.exists(_config_path):
+        print(f"[Fehler] '{_config_path}' nicht gefunden.")
+        print("Mit generate_config.py eine config.json erzeugen und in denselben Ordner legen.")
+        sys.exit(1)
+
+    with open(_config_path, "r", encoding="utf-8") as f:
+        _cfg = json.load(f)
+
+    start_blocking(
+        files_dir=_base_dir,
+        api_id=_cfg["api_id"],
+        api_hash=_cfg["api_hash"],
+        session_string=_cfg["session_string"],
+        channels_json=json.dumps(_cfg["channels"]),
+        tmdb_key=_cfg.get("tmdb_key", ""),
+        tmdb_lang="de-DE",
+        xtream_user=_cfg.get("xtream_user", "admin"),
+        xtream_pass=_cfg.get("xtream_pass", "admin"),
+    )
